@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# fzf-powered worktree selector. Prints the selected worktree path, or the main
+# worktree path with `wtgo -`. A script can't cd its parent shell, so wrap it:
+#   wtgo() { cd "$(command wtgo "$@")" || return; }
+
+if [[ "${1:-}" == "-" ]]; then
+    git worktree list --porcelain | awk 'NR == 1 { sub(/^worktree /, ""); print }'
+    exit 0
+fi
+
+selected=$(git worktree list | fzf --height=40% --reverse --prompt="worktree> " | awk '{print $1}')
+
+if [[ -z "$selected" ]]; then
+    exit 1
+fi
+
+echo "$selected"
