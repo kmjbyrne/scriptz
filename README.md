@@ -31,6 +31,7 @@ link:
 ```bash
 mkdir -p ~/.local/bin
 ln -sf "$PWD/workflow/wtgo" ~/.local/bin/wtgo
+ln -sf "$PWD/bin/pr-tree" ~/.local/bin/pr-tree
 ```
 
 Check that `~/.local/bin` is on your `PATH`. If `command -v wtgo` prints
@@ -46,6 +47,7 @@ You need one line per folder, because the shell does not search subfolders:
 
 ```bash
 export PATH="$HOME/.local/share/scriptz/workflow:$PATH"
+export PATH="$HOME/.local/share/scriptz/bin:$PATH"
 ```
 
 For `wtgo`, add this function to the same file, then open a new shell:
@@ -81,6 +83,32 @@ its parent shell's directory. A small shell function of the same name does the
 `cd`. See [Installation](#installation) for the setup.
 
 It needs `git` and `fzf` on your `PATH`.
+
+## Bin
+
+### PR Tree
+
+`pr-tree`
+
+Prints a file tree with commit summaries for a stack of PR branches. Useful for
+visualizing what changed across a series of stacked PRs.
+
+```bash
+pr-tree <base-branch> <branch1> [branch2] [branch3] ...
+```
+
+Example with a 3-PR stack off main:
+
+```bash
+pr-tree main sign-fr-duplicate-client sign-fr-duplicate-domain sign-fr-duplicate-rest
+```
+
+Output groups changes per branch, shows commit subjects, and renders a collapsed
+directory tree (single-child dirs are joined into one line, so deep package
+paths stay compact). If the last branch is your current branch and has
+uncommitted changes, those are included automatically.
+
+It needs `git` and `python3` on your `PATH`.
 
 ## License
 
