@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+
+"""Prints a file tree with commit summaries for a stack of PR branches.
+
+Collapses single-child directories so deep package paths stay compact.
+Annotates each file with its change type and added symbols (functions,
+classes, interfaces) extracted from the diff.
+
+If the last branch is the current branch and has uncommitted changes,
+those are included automatically.
+
+Usage:
+    pr-tree <base> <branch1> [branch2] [branch3] ...
+    pr-tree main feature-client feature-domain feature-rest
+"""
+
+import re
+import subprocess
+import sys
+
+
+STATUS_LABELS = {
+    "A": "new",
+    "M": "modified",
+    "D": "deleted",
+    "R": "renamed",
+    "C": "copied",
+    "U": "unmerged",
+    "?": "untracked",
+}
+
+SYMBOL_PATTERNS = [
+    # Kotlin / Java
+    (r"^\+\s*(?:override\s+)?(?:(?:public|private|protected|internal)\s+)?(?:suspend\s+)?fun\s+(\w+)", "fun"),
+    (r"^\+\s*(?:data\s+|sealed\s+|abstract\s+|open\s+)?class\s+(\w+)", "class"),
+    (r"^\+\s*(?:fun\s+)?interface\s+(\w+)", "interface"),
+    (r"^\+\s*object\s+(\w+)", "object"),
+    (r"^\+\s*enum\s+class\s+(\w+)", "enum"),
+    # Python
+    (r"^\+\s*def\s+(\w+)", "def"),
+    (r"^\+\s*class\s+(\w+)", "class"),
+    # Go
+    (r"^\+func\s+(?:\([^)]+\)\s+)?(\w+)", "func"),
+    (r"^\+type\s+(\w+)\s+struct", "struct"),
+    (r"^\+type\s+(\w+)\s+interface", "interface"),
+    # TypeScript / JavaScript
+    (r"^\+\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)", "function"),
+    (r"^\+\s*(?:export\s+)?class\s+(\w+)", "class"),
+    (r"^\+\s*(?:export\s+)?interface\s+(\w+)", "interface"),
+    # Rust
+    (r"^\+\s*(?:pub\s+)?fn\s+(\w+)", "fn"),
+    (r"^\+\s*(?:pub\s+)?struct\s+(\w+)", "struct"),
+    (r"^\+\s*(?:pub\s+)?trait\s+(\w+)", "trait"),
+    (r"^\+\s*(?:pub\s+)?enum\s+(\w+)", "enum"),
+    # Enum values (Kotlin/Java): standalone uppercase identifiers on added lines
+    (r"^\+\s+([A-Z][A-Z0-9_]+)\s*[,(]?$", "value"),
+]
+
+COMPILED_PATTERNS = [(re.compile(p), kind) for p, kind in SYMBOL_PATTERNS]
+
+# Symbols matching these patterns are noise (test constants, common overrides).
+SYMBOL_NOISE = re.compile(
+    r"^(?:TEST_|MOCK_|FAKE_|STUB_)"
+    r"|^(?:toString|hashCode|equals|setUp|tearDown|beforeEach|afterEach|beforeAll|afterAll)$"
+    r"|^(?:Map|List|Set|String|Int|Long|Boolean)$"
+)
+
+
+def git(*args):
+    result = subprocess.run(["git"] + list(args), capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def get_file_statuses(range_spec):
+    output = git("diff", "--name-status", range_spec)
+    statuses = {}
+    for line in output.splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        status = parts[0][0]
+        filepath = parts[-1]
+        statuses[filepath] = status
+    return statuses
+
+
+def get_added_symbols(range_spec, filepath):
+    diff = git("diff", "-U0", range_spec, "--", filepath)
+    if not diff:
+        diff = git("diff", "-U0", "HEAD", "--", filepath)
+    if not diff:
+        # Untracked file: diff against empty tree
+        try:
+            result = subprocess.run(
+                ["git", "diff", "-U0", "--no-index", "/dev/null", filepath],
+                capture_output=True, text=True,
+            )
+            diff = result.stdout
+        except Exception:
+            pass
+    symbols = []
+    seen = set()
+    for line in diff.splitlines():
+        for pattern, kind in COMPILED_PATTERNS:
+            m = pattern.match(line)
+            if m:
+                name = m.group(1)
+                if SYMBOL_NOISE.match(name):
+                    break
+                key = (kind, name)
+                if key not in seen:
+                    seen.add(key)
+                    symbols.append((kind, name))
+                break
+    return symbols
+
+
+def format_symbols(symbols):
+    if not symbols:
+        return ""
+
+    grouped = {}
+    for kind, name in symbols:
+        grouped.setdefault(kind, []).append(name)
+
+    parts = []
+    for kind, names in grouped.items():
+        if len(names) <= 3:
+            for name in names:
+                parts.append(f"+{name}")
+        else:
+            parts.append(f"+{len(names)} {kind}s")
+
+    return ", ".join(parts)
+
+
+def build_tree(paths):
+    tree = {}
+    for p in paths:
+        parts = p.split("/")
+        node = tree
+        for part in parts:
+            if part not in node:
+                node[part] = {}
+            node = node[part]
+    return tree
+
+
+def collapse(tree):
+    result = {}
+    for key, children in tree.items():
+        collapsed = collapse(children)
+        if len(collapsed) == 1 and list(collapsed.values())[0]:
+            child_key = list(collapsed.keys())[0]
+            child_val = list(collapsed.values())[0]
+            result[f"{key}/{child_key}"] = child_val
+        else:
+            result[key] = collapsed
+    return result
+
+
+def render(tree, statuses, file_annotations, prefix="  ", path_prefix=""):
+    entries = sorted(tree.keys(), key=lambda k: (not tree[k], k))
+    for i, name in enumerate(entries):
+        is_last = i == len(entries) - 1
+        connector = "└── " if is_last else "├── "
+        children = tree[name]
+
+        full_path = f"{path_prefix}/{name}" if path_prefix else name
+        leaf_path = full_path.lstrip("/")
+
+        if children:
+            print(f"{prefix}{connector}{name}/")
+            extension = "    " if is_last else "│   "
+            render(children, statuses, file_annotations, prefix + extension, full_path)
+        else:
+            status = STATUS_LABELS.get(statuses.get(leaf_path, ""), "")
+            symbols = file_annotations.get(leaf_path, "")
+
+            detail_parts = []
+            if status:
+                detail_parts.append(status)
+            if symbols:
+                detail_parts.append(symbols)
+
+            detail = f" ({', '.join(detail_parts)})" if detail_parts else ""
+            print(f"{prefix}{connector}{name}{detail}")
+
+
+def print_branch(prev, branch, is_last):
+    range_spec = f"{prev}..{branch}"
+
+    subjects = git("log", "--reverse", "--format=%s", range_spec)
+    statuses = get_file_statuses(range_spec)
+
+    current = git("branch", "--show-current")
+    if is_last and branch == current:
+        uncommitted_output = git("diff", "--name-status", "HEAD")
+        for line in uncommitted_output.splitlines():
+            if not line:
+                continue
+            parts = line.split("\t")
+            status = parts[0][0]
+            filepath = parts[-1]
+            statuses[filepath] = status
+
+        untracked = git("ls-files", "--others", "--exclude-standard")
+        for filepath in untracked.splitlines():
+            if filepath and filepath not in statuses:
+                statuses[filepath] = "?"
+
+        if not subjects and statuses:
+            subjects = "(uncommitted changes)"
+
+    print(f"=== {branch} ===")
+    print()
+
+    if subjects:
+        for line in subjects.splitlines():
+            print(f"  {line}")
+    else:
+        print("  (no commits)")
+    print()
+
+    files = sorted(statuses.keys())
+    if not files:
+        print("  (no changes)")
+    else:
+        file_annotations = {}
+        for filepath in files:
+            if statuses[filepath] == "D":
+                continue
+            symbols = get_added_symbols(range_spec, filepath)
+            sym_str = format_symbols(symbols)
+            if sym_str:
+                file_annotations[filepath] = sym_str
+
+        tree = build_tree(files)
+        tree = collapse(tree)
+        render(tree, statuses, file_annotations)
+    print()
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <base-branch> <branch1> [branch2] ...", file=sys.stderr)
+        sys.exit(1)
+
+    base = sys.argv[1]
+    branches = sys.argv[2:]
+
+    prev = base
+    for i, branch in enumerate(branches):
+        print_branch(prev, branch, i == len(branches) - 1)
+        prev = branch
+
+
+if __name__ == "__main__":
+    main()
