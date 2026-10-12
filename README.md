@@ -30,11 +30,11 @@ link:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -sf ~/.local/share/scriptz/workflow/wtgo ~/.local/bin/wtgo
+ln -sf ~/.local/share/scriptz/workflow/wt ~/.local/bin/wt
 ```
 
-Check that `~/.local/bin` is on your `PATH`. If `command -v wtgo` prints
-nothing, add this line to `~/.zshrc` or `~/.bashrc`:
+Check that `~/.local/bin` is on your `PATH`. If `command -v wt` prints nothing,
+add this line to `~/.zshrc` or `~/.bashrc`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -48,16 +48,16 @@ You need one line per folder, because the shell does not search subfolders:
 export PATH="$HOME/.local/share/scriptz/workflow:$PATH"
 ```
 
-For `wtgo`, add this function to the same file, then open a new shell:
+For `wt`, add this function to the same file, then open a new shell:
 
 ```bash
-wtgo() { cd "$(command wtgo "$@")" || return; }
+wt() { cd "$(command wt "$@")" || return; }
 ```
 
-`command wtgo` skips the function and runs the script on your `PATH`, so the
+`command wt` skips the function and runs the script on your `PATH`, so the
 function can share its name without calling itself.
 
-To uninstall a script, remove its link with `rm ~/.local/bin/wtgo`.
+To uninstall a script, remove its link with `rm ~/.local/bin/wt`.
 
 ## Scripts
 
@@ -67,25 +67,37 @@ Scripts are grouped by folder.
 
 ### Worktree Fuzzy GoGo
 
-`wtgo`
+`wt`
 
-Fuzzy-select a git worktree and `cd` into it. Run `wtgo` inside a repo, pick a
+Fuzzy-select a git worktree and `cd` into it. Run `wt` inside a repo, pick a
 worktree from the fzf list, and your shell moves there. Cancel with `Esc` to
 stay where you are.
 
-Run `wtgo -` to jump back to the main worktree, the original clone that the
-other worktrees hang off. It skips the picker.
+Run `wt -` to jump back to the main worktree, the original clone that the other
+worktrees hang off. It skips the picker.
 
-Add `--copy-env` to bring your env files along. It copies every untracked `.env`
-and `.env.*` file from the current worktree into the target, keeping their
-paths, so `apps/api/.env.local` lands in the same place. Tracked files such as
+Pass a search term to pre-fill the picker, as in `wt feature`. If only one
+worktree matches, `wt` jumps straight there.
+
+Add `--env` to bring your env files along. It copies every untracked `.env` and
+`.env.*` file from the current worktree into the target, keeping their paths, so
+`apps/api/.env.local` lands in the same place. Tracked files such as
 `.env.example` and anything under `node_modules` are left out. Files that
 already exist in the target are skipped, never overwritten. It works with both
 forms:
 
 ```bash
-wtgo --copy-env
-wtgo - --copy-env
+wt --env
+wt - --env
+```
+
+Pass a file name to copy only that file, wherever it sits in the tree. The name
+can be a glob. `--env=*` is the same as plain `--env`. The old `--copy-env` flag
+still works as an alias.
+
+```bash
+wt --env=.env.local
+wt --env='.env.*.local'
 ```
 
 The script itself only prints the selected path, because a script cannot change
