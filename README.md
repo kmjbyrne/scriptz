@@ -127,6 +127,9 @@ wtgc -f
 
 # Rescue folders before deleting
 wtgc --merge instance --merge notes
+
+# Rescue instance, but leave instance/var behind
+wtgc --merge instance --merge '!instance/var'
 ```
 
 `--merge PATH` copies `PATH` out of each worktree into the same path under the
@@ -135,6 +138,14 @@ current worktree before the worktree is deleted. `wtgc --merge instance` moves
 Pass it more than once for several paths. When a file exists on both sides with
 different content, yours stays and the rescued copy lands beside it as
 `<name>.<branch>`, so nothing is lost.
+
+Prefix a path with `!` to leave it out of the rescue. The path can be a glob.
+Quote it, or your shell may treat `!` as history expansion.
+
+An unmerged branch is skipped before anything is touched, so its worktree stays
+put. "Merged" uses the same test as `git branch -d`: merged into the branch's
+upstream if it has one, else into the main worktree's `HEAD`. Squash-merged PRs
+count as unmerged, so delete those with `-f`.
 
 The list leaves out the main worktree's branch, the branch you are on, and the
 `origin` default branch. If a worktree or local branch can't be removed, that

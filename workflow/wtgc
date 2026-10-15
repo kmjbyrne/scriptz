@@ -7,16 +7,27 @@ set -euo pipefail
 # branch, and its branch on origin. Pass -f to force past dirty worktrees and
 # unmerged branches. Pass --merge PATH (repeatable) to copy PATH out of each
 # worktree into the same path under the current worktree before deleting it.
+# --merge '!PATH' leaves PATH out of the rescue.
 
-usage() { echo "usage: wtgc [-f] [--merge PATH]..." >&2; exit 2; }
+usage() { echo "usage: wtgc [-f] [--merge [!]PATH]..." >&2; exit 2; }
+
+add_merge() {
+    local rel=${1%/}
+    if [[ "$rel" == '!'* ]]; then
+        excludes+=("${rel#!}")
+    else
+        merges+=("$rel")
+    fi
+}
 
 force=false
 merges=()
+excludes=()
 while (($#)); do
     case "$1" in
         -f) force=true ;;
-        --merge) (($# > 1)) || usage; merges+=("$2"); shift ;;
-        --merge=*) merges+=("${1#--merge=}") ;;
+        --merge) (($# > 1)) || usage; add_merge "$2"; shift ;;
+        --merge=*) add_merge "${1#--merge=}" ;;
         *) usage ;;
     esac
     shift
@@ -31,14 +42,26 @@ default=${default#origin/}
 # pulls the directory out from under git itself.
 g() { git -C "$main" "$@"; }
 
-# Copy every file under $1/$3 to $2/$3. A file that already exists with
+# Same test `git branch -d` applies: merged into the upstream if set, else HEAD.
+merged() {
+    local into
+    into=$(g rev-parse -q --verify "$1@{upstream}" 2>/dev/null) || into=HEAD
+    g merge-base --is-ancestor "$1" "$into"
+}
+
+# Copy every file under $1/$3 to $2/$3, skipping excluded paths. A file that already exists with
 # different content is kept and the incoming copy lands beside it as
 # <name>.<branch>, so nothing from the worktree is lost.
 rescue() {
-    local src=$1 dest=$2 rel=$3 suffix=${4//\//-} file target
+    local src=$1 dest=$2 rel=$3 suffix=${4//\//-} file target ex
     [[ -e "$src/$rel" ]] || return 0
     while IFS= read -r -d '' file; do
-        target="$dest/${file#"$src"/}"
+        file=${file#"$src"/}
+        for ex in ${excludes[@]+"${excludes[@]}"}; do
+            [[ "$file" == $ex || "$file" == $ex/* ]] && continue 2
+        done
+        target="$dest/$file"
+        file="$src/$file"
         mkdir -p "$(dirname "$target")"
         if [[ ! -e "$target" ]]; then
             cp -p "$file" "$target"
@@ -77,6 +100,9 @@ done <<< "$selected"
 if ((${#merges[@]})); then
     echo "Rescuing into $here: ${merges[*]}"
 fi
+if ((${#excludes[@]})); then
+    echo "Excluding: ${excludes[*]}"
+fi
 
 read -r -p "Proceed? [y/N] " answer < /dev/tty
 [[ "$answer" == [yY] ]] || exit 1
@@ -91,6 +117,12 @@ fi
 status=0
 while read -r branch; do
     path=$(g for-each-ref --format='%(worktreepath)' "refs/heads/$branch")
+
+    if ! $force && ! merged "$branch"; then
+        echo "skipped $branch: not fully merged (retry with -f)" >&2
+        status=1
+        continue
+    fi
 
     if [[ -n "$path" ]]; then
         for rel in ${merges[@]+"${merges[@]}"}; do
