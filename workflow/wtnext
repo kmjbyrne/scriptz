@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# fzf-powered handover queue. Lists every instance/next/<date>/*.md note across
+# all worktrees of the current repo, newest first, with the note as preview.
+# Picking one starts Claude in that note's worktree with the note as its task.
+# `wtnext <query>` pre-fills the picker. Arguments after -- go to claude.
+
+query=""
+claude_args=()
+while (($#)); do
+    case "$1" in
+        --) shift; claude_args=("$@"); break ;;
+        -*) echo "usage: wtnext [query] [-- claude args]" >&2; exit 2 ;;
+        *) query=$1 ;;
+    esac
+    shift
+done
+
+selected=$(
+    git worktree list --porcelain |
+        awk '/^worktree / { print substr($0, 10) }' |
+        while IFS= read -r root; do
+            branch=$(git -C "$root" branch --show-current 2>/dev/null || true)
+            for note in "$root"/instance/next/*/*.md; do
+                [[ -f "$note" ]] || continue
+                rel=${note#"$root"/instance/next/}
+                printf '%s\t%s\t%s\t%s\n' "$note" "$root" "${rel%%/*}" "${branch:-(detached)}  ${rel#*/}"
+            done
+        done |
+        sort -t $'\t' -k3,3r |
+        SHELL=bash fzf --height=60% --reverse --prompt="next> " --delimiter='\t' \
+            --with-nth=3,4 --query="$query" \
+            --preview='cat {1}' --preview-window=right,60%,wrap
+)
+
+if [[ -z "$selected" ]]; then
+    exit 1
+fi
+
+note=$(cut -f1 <<< "$selected")
+root=$(cut -f2 <<< "$selected")
+
+cd "$root"
+exec claude ${claude_args[@]+"${claude_args[@]}"} \
+    "Pick up the handover in ${note#"$root"/}. Read it, then carry out what it asks."

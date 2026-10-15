@@ -163,6 +163,20 @@ Claude Code could break the `●` marks.
 
 It needs `git`, `fzf` and `claude` on your `PATH`.
 
+### Worktree Next
+
+`wtnext`
+
+Treat handover notes as a queue. It lists every `instance/next/<date>/*.md` note
+across all worktrees, newest first, with the note in the preview. Pick one, and
+Claude starts in that note's worktree with the note as its task. Pass a search
+term to pre-fill the picker, and flags for `claude` after `--`.
+
+It doesn't track which notes are done. Delete or move a note once it's handled,
+or it stays in the list.
+
+It needs `git`, `fzf` and `claude` on your `PATH`.
+
 ### Worktree Fuzzy Garbage Collect
 
 `wtgc`
