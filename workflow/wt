@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# fzf-powered worktree selector. Prints the selected worktree path, or the main
+# worktree path with `wt -`. `wt <query>` pre-fills the picker and skips it when
+# only one worktree matches. A script can't cd its parent shell, so wrap it:
+#   wt() { cd "$(command wt "$@")" || return; }
+#
+# --env copies untracked .env and .env.* files from the current worktree into
+# the target. --env=<name> copies only files with that name, which may be a glob.
+# Existing files in the target are kept. stdout carries only the path, so all
+# messages go to stderr.
+
+to_main=false
+copy_env=false
+query=""
+env_specs=(':(glob)**/.env' ':(glob)**/.env.*')
+
+for arg in "$@"; do
+    case "$arg" in
+        -) to_main=true ;;
+        --env|--env=|--env=\*|--copy-env) copy_env=true ;;
+        --env=*)
+            copy_env=true
+            env_specs=(":(glob)**/${arg#--env=}")
+            ;;
+        -*) echo "wt: unknown argument: $arg" >&2; exit 2 ;;
+        *) query=$arg ;;
+    esac
+done
+
+if $to_main; then
+    selected=$(git worktree list --porcelain | awk 'NR == 1 { sub(/^worktree /, ""); print }')
+else
+    selected=$(git worktree list | fzf --height=40% --reverse --prompt="worktree> " \
+        --query="$query" --select-1 --exit-0 | awk '{print $1}')
+fi
+
+if [[ -z "$selected" ]]; then
+    exit 1
+fi
+
+if $copy_env; then
+    source_root=$(git rev-parse --show-toplevel)
+
+    if [[ "$source_root" == "$selected" ]]; then
+        echo "wt: already in target worktree, nothing to copy" >&2
+    else
+        while IFS= read -r -d '' file; do
+            if [[ -e "$selected/$file" ]]; then
+                echo "wt: skipped $file (exists)" >&2
+                continue
+            fi
+            mkdir -p "$(dirname "$selected/$file")"
+            cp -p "$source_root/$file" "$selected/$file"
+            echo "wt: copied $file" >&2
+        done < <(git -C "$source_root" ls-files -z --others -- \
+            "${env_specs[@]}" ':(exclude,glob)**/node_modules/**')
+    fi
+fi
+
+echo "$selected"
