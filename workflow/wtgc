@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# fzf-powered branch and worktree cleanup. Pick one or more local branches
+# (Tab to multi-select), confirm, and each one loses its worktree, its local
+# branch, and its branch on origin. Pass -f to force past dirty worktrees and
+# unmerged branches. Pass --merge PATH (repeatable) to copy PATH out of each
+# worktree into the same path under the current worktree before deleting it.
+
+usage() { echo "usage: wtgc [-f] [--merge PATH]..." >&2; exit 2; }
+
+force=false
+merges=()
+while (($#)); do
+    case "$1" in
+        -f) force=true ;;
+        --merge) (($# > 1)) || usage; merges+=("$2"); shift ;;
+        --merge=*) merges+=("${1#--merge=}") ;;
+        *) usage ;;
+    esac
+    shift
+done
+
+main=$(git worktree list --porcelain | awk 'NR == 1 { sub(/^worktree /, ""); print }')
+here=$(git rev-parse --show-toplevel)
+default=$(git -C "$main" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+default=${default#origin/}
+
+# Running git from the main worktree means removing a linked worktree never
+# pulls the directory out from under git itself.
+g() { git -C "$main" "$@"; }
+
+# Copy every file under $1/$3 to $2/$3. A file that already exists with
+# different content is kept and the incoming copy lands beside it as
+# <name>.<branch>, so nothing from the worktree is lost.
+rescue() {
+    local src=$1 dest=$2 rel=$3 suffix=${4//\//-} file target
+    [[ -e "$src/$rel" ]] || return 0
+    while IFS= read -r -d '' file; do
+        target="$dest/${file#"$src"/}"
+        mkdir -p "$(dirname "$target")"
+        if [[ ! -e "$target" ]]; then
+            cp -p "$file" "$target"
+        elif ! cmp -s "$file" "$target"; then
+            cp -p "$file" "$target.$suffix"
+            echo "kept both: ${target#"$dest"/}.$suffix" >&2
+        fi
+    done < <(find "$src/$rel" -type f -print0)
+}
+
+protected=$(g worktree list --porcelain | awk -v main="$main" -v here="$here" '
+    /^worktree / { path = substr($0, 10) }
+    /^branch /   { if (path == main || path == here) { sub(/^branch refs\/heads\//, ""); print } }
+')
+
+selected=$(
+    g for-each-ref --format='%(refname:short)%09%(worktreepath)' refs/heads |
+        awk -F '\t' -v protected="$protected" -v def="$default" '
+            BEGIN { n = split(protected, p, "\n"); for (i = 1; i <= n; i++) skip[p[i]] = 1; skip[def] = 1 }
+            !($1 in skip)
+        ' |
+        column -t -s $'\t' |
+        fzf --multi --height=40% --reverse --prompt="delete> " |
+        awk '{print $1}'
+)
+
+if [[ -z "$selected" ]]; then
+    exit 1
+fi
+
+echo "To delete (worktree, local branch, origin branch):"
+while read -r branch; do
+    path=$(g for-each-ref --format='%(worktreepath)' "refs/heads/$branch")
+    echo "  $branch${path:+  ($path)}"
+done <<< "$selected"
+if ((${#merges[@]})); then
+    echo "Rescuing into $here: ${merges[*]}"
+fi
+
+read -r -p "Proceed? [y/N] " answer < /dev/tty
+[[ "$answer" == [yY] ]] || exit 1
+
+worktree_flag=
+branch_flag=-d
+if $force; then
+    worktree_flag=--force
+    branch_flag=-D
+fi
+
+status=0
+while read -r branch; do
+    path=$(g for-each-ref --format='%(worktreepath)' "refs/heads/$branch")
+
+    if [[ -n "$path" ]]; then
+        for rel in ${merges[@]+"${merges[@]}"}; do
+            rescue "$path" "$here" "${rel%/}" "$branch"
+        done
+    fi
+
+    if [[ -n "$path" ]] && ! g worktree remove $worktree_flag "$path"; then
+        echo "skipped $branch: worktree not removed (retry with -f)" >&2
+        status=1
+        continue
+    fi
+
+    if ! g branch "$branch_flag" "$branch"; then
+        echo "skipped $branch: local branch not deleted (retry with -f)" >&2
+        status=1
+        continue
+    fi
+
+    if g ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+        g push origin --delete "$branch" || status=1
+    fi
+done <<< "$selected"
+
+exit "$status"

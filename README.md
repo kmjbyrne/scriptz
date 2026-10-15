@@ -31,6 +31,7 @@ link:
 ```bash
 mkdir -p ~/.local/bin
 ln -sf "$PWD/workflow/wtgo" ~/.local/bin/wtgo
+ln -sf "$PWD/workflow/wtgc" ~/.local/bin/wtgc
 ln -sf "$PWD/bin/pr-tree" ~/.local/bin/pr-tree
 ```
 
@@ -81,6 +82,40 @@ other worktrees hang off. It skips the picker.
 The script itself only prints the selected path, because a script cannot change
 its parent shell's directory. A small shell function of the same name does the
 `cd`. See [Installation](#installation) for the setup.
+
+It needs `git` and `fzf` on your `PATH`.
+
+### Worktree Fuzzy Garbage Collect
+
+`wtgc`
+
+Fuzzy-select local branches and delete each one everywhere: its worktree on
+disk, the local branch, and the branch on `origin`. Press `Tab` to pick more
+than one. The script lists what it will delete and asks before it touches
+anything.
+
+```bash
+# Safe: skips dirty worktrees and unmerged branches
+wtgc
+
+# Force past both
+wtgc -f
+
+# Rescue folders before deleting
+wtgc --merge instance --merge notes
+```
+
+`--merge PATH` copies `PATH` out of each worktree into the same path under the
+current worktree before the worktree is deleted. `wtgc --merge instance` moves
+`<worktree>/instance` into `./instance`, merging with what is already there.
+Pass it more than once for several paths. When a file exists on both sides with
+different content, yours stays and the rescued copy lands beside it as
+`<name>.<branch>`, so nothing is lost.
+
+The list leaves out the main worktree's branch, the branch you are on, and the
+`origin` default branch. If a worktree or local branch can't be removed, that
+branch is skipped and nothing is pushed for it. The script exits non-zero if
+anything was skipped.
 
 It needs `git` and `fzf` on your `PATH`.
 
