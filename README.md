@@ -51,10 +51,12 @@ export PATH="$HOME/.local/share/scriptz/workflow:$PATH"
 export PATH="$HOME/.local/share/scriptz/bin:$PATH"
 ```
 
-For `wt`, add this function to the same file, then open a new shell:
+For `wt` and `wtnew`, add these functions to the same file, then open a new
+shell:
 
 ```bash
 wt() { cd "$(command wt "$@")" || return; }
+wtnew() { cd "$(command wtnew "$@")" || return; }
 ```
 
 `command wt` skips the function and runs the script on your `PATH`, so the
@@ -108,6 +110,30 @@ its parent shell's directory. A small shell function of the same name does the
 `cd`. See [Installation](#installation) for the setup.
 
 It needs `git` and `fzf` on your `PATH`.
+
+### Worktree New
+
+`wtnew`
+
+Create a worktree and `cd` into it. Run `wtnew feat/search` to name the branch,
+or plain `wtnew` to fuzzy-pick one. The picker lists local branches without a
+worktree and `origin` branches you don't have locally. Type a name that matches
+nothing to create a new branch. A new branch starts from the main worktree's
+`HEAD`, and an `origin` branch is checked out with tracking set up.
+
+The worktree goes in `<main>/.claude/worktrees/<branch>`, where `claude -w` puts
+its own, with `/` in the branch name turned into `-`. Untracked `.env` and
+`.env.*` files from the main worktree are copied in.
+
+Add `--claude` to start Claude in the new worktree, with an optional first
+prompt. When Claude exits, your shell is in the worktree:
+
+```bash
+wtnew feat/search --claude "Add a search box to the header"
+```
+
+Like `wt`, it needs the shell function from [Installation](#installation) to
+`cd`. It needs `git` and `fzf` on your `PATH`, plus `claude` for `--claude`.
 
 ### Worktree Fuzzy Garbage Collect
 

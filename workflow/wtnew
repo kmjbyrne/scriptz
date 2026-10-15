@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Create a worktree under <main>/.claude/worktrees, the same place `claude -w`
+# uses, and print its path. With no branch, fuzzy-pick a local or origin branch
+# that has no worktree yet, or type a new name. A new branch starts from the
+# main worktree's HEAD. Untracked .env files from the main worktree are copied
+# in. --claude PROMPT starts Claude in the new worktree first. Wrap it to cd:
+#   wtnew() { cd "$(command wtnew "$@")" || return; }
+
+usage() { echo "usage: wtnew [branch] [--claude [PROMPT]]" >&2; exit 2; }
+
+branch=""
+claude=false
+prompt=()
+while (($#)); do
+    case "$1" in
+        --claude)
+            claude=true
+            if (($# > 1)); then prompt=("$2"); shift; fi
+            ;;
+        -*) usage ;;
+        *) branch=$1 ;;
+    esac
+    shift
+done
+
+main=$(git worktree list --porcelain | awk 'NR == 1 { sub(/^worktree /, ""); print }')
+g() { git -C "$main" "$@"; }
+
+if [[ -z "$branch" ]]; then
+    # fzf exits 1 when nothing matches, which is how a new name is typed, and
+    # 130 on Esc.
+    rc=0
+    picked=$(
+        {
+            g for-each-ref --format='%(if)%(worktreepath)%(then)%(else)%(refname:short)%(end)' refs/heads
+            g for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin |
+                grep -vx HEAD | grep -vxF -f <(g for-each-ref --format='%(refname:short)' refs/heads)
+        } |
+            grep -v '^$' | sort -u |
+            fzf --height=40% --reverse --prompt="branch> " --print-query
+    ) || rc=$?
+    ((rc <= 1)) || exit 1
+    branch=$(tail -n 1 <<< "$picked")
+fi
+
+if [[ -z "$branch" ]]; then
+    exit 1
+fi
+
+path="$main/.claude/worktrees/${branch//\//-}"
+
+if g show-ref --quiet --verify "refs/heads/$branch"; then
+    g worktree add "$path" "$branch" >&2
+elif g show-ref --quiet --verify "refs/remotes/origin/$branch"; then
+    g worktree add --track -b "$branch" "$path" "origin/$branch" >&2
+else
+    g worktree add -b "$branch" "$path" >&2
+fi
+
+while IFS= read -r -d '' file; do
+    [[ -e "$path/$file" ]] && continue
+    mkdir -p "$(dirname "$path/$file")"
+    cp -p "$main/$file" "$path/$file"
+    echo "wtnew: copied $file" >&2
+done < <(g ls-files -z --others -- ':(glob)**/.env' ':(glob)**/.env.*' \
+    ':(exclude,glob)**/node_modules/**')
+
+# stdout is usually captured by the cd wrapper, so Claude gets the terminal.
+if $claude; then
+    (cd "$path" && claude ${prompt[@]+"${prompt[@]}"} > /dev/tty)
+fi
+
+echo "$path"
