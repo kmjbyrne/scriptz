@@ -8,10 +8,11 @@ set -euo pipefail
 # check mark; a branch whose GitHub PR merged counts, so squash merges do too.
 # --merged lists only those. -f forces past dirty worktrees and unmerged
 # branches. --merge PATH (repeatable) copies PATH out of each worktree into the
-# same path under the current worktree before deleting it, and --merge '!PATH'
-# leaves PATH out of the rescue.
+# same path under the current worktree before deleting it, and --exclude PATH
+# (or --merge '!PATH') leaves PATH out of the rescue. -v lists each file
+# salvaged. -y skips the confirmation.
 
-usage() { echo "usage: wtgc [-f] [--merged] [--merge [!]PATH]..." >&2; exit 2; }
+usage() { echo "usage: wtgc [-f] [-v] [-y] [--merged] [--merge [!]PATH]... [--exclude PATH]..." >&2; exit 2; }
 
 add_merge() {
     local rel=${1%/}
@@ -23,15 +24,21 @@ add_merge() {
 }
 
 force=false
+verbose=false
+yes=false
 only_merged=false
 merges=()
 excludes=()
 while (($#)); do
     case "$1" in
         -f) force=true ;;
+        -v) verbose=true ;;
+        -y) yes=true ;;
         --merged) only_merged=true ;;
         --merge) (($# > 1)) || usage; add_merge "$2"; shift ;;
         --merge=*) add_merge "${1#--merge=}" ;;
+        --exclude) (($# > 1)) || usage; add_merge "!$2"; shift ;;
+        --exclude=*) add_merge "!${1#--exclude=}" ;;
         *) usage ;;
     esac
     shift
@@ -89,6 +96,7 @@ rescue() {
         mkdir -p "$(dirname "$target")"
         if [[ ! -e "$target" ]]; then
             cp -p "$file" "$target"
+            if $verbose; then echo "salvaged: ${target#"$dest"/}"; fi
         elif ! cmp -s "$file" "$target"; then
             cp -p "$file" "$target.$suffix"
             echo "kept both: ${target#"$dest"/}.$suffix" >&2
@@ -149,8 +157,10 @@ if ((${#excludes[@]})); then
     echo "Excluding: ${excludes[*]}"
 fi
 
-read -r -p "Proceed? [y/N] " answer < /dev/tty
-[[ "$answer" == [yY] ]] || exit 1
+if ! $yes; then
+    read -r -p "Proceed? [y/N] " answer < /dev/tty
+    [[ "$answer" == [yY] ]] || exit 1
+fi
 
 worktree_flag=
 if $force; then
@@ -189,7 +199,7 @@ while IFS=$'\t' read -r label mark ref branch path; do
         continue
     fi
 
-    if g ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+    if g ls-remote --exit-code --heads origin "$branch" > /dev/null 2>&1; then
         g push origin --delete "$branch" || status=1
     fi
 done <<< "$selected"

@@ -128,11 +128,14 @@ wtgc --merged
 # Force past both
 wtgc -f
 
+# Skip the confirmation
+wtgc -y
+
 # Rescue folders before deleting
 wtgc --merge instance --merge notes
 
 # Rescue instance, but leave instance/var behind
-wtgc --merge instance --merge '!instance/var'
+wtgc --merge instance --exclude instance/var
 ```
 
 `--merge PATH` copies `PATH` out of each worktree into the same path under the
@@ -142,8 +145,11 @@ Pass it more than once for several paths. When a file exists on both sides with
 different content, yours stays and the rescued copy lands beside it as
 `<name>.<branch>`, so nothing is lost.
 
-Prefix a path with `!` to leave it out of the rescue. The path can be a glob.
-Quote it, or your shell may treat `!` as history expansion.
+Add `-v` to list each file salvaged. Clashing files are always listed.
+
+`--exclude PATH` leaves a path out of the rescue, and can be a glob.
+`--merge '!PATH'` does the same, but needs single quotes. zsh expands `!` even
+inside double quotes.
 
 Each entry shows how it's merged. `✓ git` means its commits are in the main
 worktree's `HEAD` or `origin`'s default branch. `✓ pr` means GitHub reports a
