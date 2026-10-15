@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# fzf-powered Claude session picker. Pick a worktree and resume its most recent
+# Claude conversation there, or start one if it has none. The preview shows the
+# newest instance/next handover and recent commits. `wtc <query>` pre-fills the
+# picker and skips it on a single match. -n starts a fresh conversation.
+# Arguments after -- go to claude.
+
+fresh=false
+query=""
+claude_args=()
+while (($#)); do
+    case "$1" in
+        -n) fresh=true ;;
+        --) shift; claude_args=("$@"); break ;;
+        -*) echo "usage: wtc [-n] [query] [-- claude args]" >&2; exit 2 ;;
+        *) query=$1 ;;
+    esac
+    shift
+done
+
+# Claude Code keeps each directory's conversations under ~/.claude/projects,
+# named after the path with every non-alphanumeric character turned into -.
+has_session() {
+    local dir
+    dir="$HOME/.claude/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<< "$1")"
+    compgen -G "$dir/*.jsonl" > /dev/null
+}
+
+preview='
+    note=$(ls -t {1}/instance/next/*/*.md 2>/dev/null | head -n 1)
+    git -C {1} log --oneline --color=always -8
+    if [[ -n "$note" ]]; then
+        echo
+        echo "── ${note#{1}/}"
+        cat "$note"
+    fi
+'
+
+selected=$(
+    git worktree list --porcelain |
+        awk '/^worktree / { print substr($0, 10) }' |
+        while IFS= read -r path; do
+            mark=" "
+            has_session "$path" && mark="●"
+            printf '%s\t%s %s\n' "$path" "$mark" "$(git -C "$path" branch --show-current 2>/dev/null || true)"
+        done |
+        SHELL=bash fzf --height=60% --reverse --prompt="claude> " --delimiter='\t' \
+            --with-nth=2,1 --query="$query" --select-1 --exit-0 \
+            --preview="$preview" --preview-window=right,60% |
+        cut -f1
+)
+
+if [[ -z "$selected" ]]; then
+    exit 1
+fi
+
+cd "$selected"
+if ! $fresh && has_session "$selected"; then
+    exec claude --continue ${claude_args[@]+"${claude_args[@]}"}
+fi
+exec claude ${claude_args[@]+"${claude_args[@]}"}

@@ -135,6 +135,34 @@ wtnew feat/search --claude "Add a search box to the header"
 Like `wt`, it needs the shell function from [Installation](#installation) to
 `cd`. It needs `git` and `fzf` on your `PATH`, plus `claude` for `--claude`.
 
+### Worktree Claude
+
+`wtc`
+
+Fuzzy-pick a worktree and resume its latest Claude conversation there. A `●`
+marks worktrees that have one. Those without one start a fresh conversation. The
+preview shows recent commits and the newest note in `instance/next`.
+
+```bash
+# Pick, then resume
+wtc
+
+# Pre-fill the picker, and skip it on a single match
+wtc search
+
+# Start fresh even if a conversation exists
+wtc -n
+
+# Pass flags through to claude
+wtc -- --model opus
+```
+
+Claude Code stores conversations under `~/.claude/projects`, in a folder named
+after the directory. `wtc` relies on that naming to find them, so a change in
+Claude Code could break the `●` marks.
+
+It needs `git`, `fzf` and `claude` on your `PATH`.
+
 ### Worktree Fuzzy Garbage Collect
 
 `wtgc`
