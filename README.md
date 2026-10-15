@@ -25,14 +25,18 @@ git clone git@github.com:kmjbyrne/scriptz.git ~/.local/share/scriptz
 cd ~/.local/share/scriptz
 ```
 
-Symlink each script you want into `~/.local/bin`. Use `-f` to replace an old
-link:
+Symlink every script into `~/.local/bin` in one go. `-f` replaces old links, so
+rerun it after a `git pull` to pick up new scripts:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -sf "$PWD/workflow/wt" ~/.local/bin/wt
-ln -sf "$PWD/workflow/wtgc" ~/.local/bin/wtgc
-ln -sf "$PWD/bin/pr-tree" ~/.local/bin/pr-tree
+for f in ~/.local/share/scriptz/{bin,workflow}/*; do ln -sf "$f" ~/.local/bin/; done
+```
+
+Or link only the scripts you want:
+
+```bash
+ln -sf ~/.local/share/scriptz/workflow/wt ~/.local/bin/wt
 ```
 
 Check that `~/.local/bin` is on your `PATH`. If `command -v wt` prints nothing,
