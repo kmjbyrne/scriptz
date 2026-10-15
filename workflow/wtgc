@@ -2,14 +2,16 @@
 
 set -euo pipefail
 
-# fzf-powered branch and worktree cleanup. Pick one or more local branches
-# (Tab to multi-select), confirm, and each one loses its worktree, its local
-# branch, and its branch on origin. Pass -f to force past dirty worktrees and
-# unmerged branches. Pass --merge PATH (repeatable) to copy PATH out of each
-# worktree into the same path under the current worktree before deleting it.
-# --merge '!PATH' leaves PATH out of the rescue.
+# fzf-powered branch and worktree cleanup. Pick one or more local branches or
+# detached worktrees (Tab to multi-select), confirm, and each one loses its
+# worktree, its local branch, and its branch on origin. Merged entries carry a
+# check mark; a branch whose GitHub PR merged counts, so squash merges do too.
+# --merged lists only those. -f forces past dirty worktrees and unmerged
+# branches. --merge PATH (repeatable) copies PATH out of each worktree into the
+# same path under the current worktree before deleting it, and --merge '!PATH'
+# leaves PATH out of the rescue.
 
-usage() { echo "usage: wtgc [-f] [--merge [!]PATH]..." >&2; exit 2; }
+usage() { echo "usage: wtgc [-f] [--merged] [--merge [!]PATH]..." >&2; exit 2; }
 
 add_merge() {
     local rel=${1%/}
@@ -21,11 +23,13 @@ add_merge() {
 }
 
 force=false
+only_merged=false
 merges=()
 excludes=()
 while (($#)); do
     case "$1" in
         -f) force=true ;;
+        --merged) only_merged=true ;;
         --merge) (($# > 1)) || usage; add_merge "$2"; shift ;;
         --merge=*) add_merge "${1#--merge=}" ;;
         *) usage ;;
@@ -42,16 +46,36 @@ default=${default#origin/}
 # pulls the directory out from under git itself.
 g() { git -C "$main" "$@"; }
 
-# Same test `git branch -d` applies: merged into the upstream if set, else HEAD.
-merged() {
-    local into
-    into=$(g rev-parse -q --verify "$1@{upstream}" 2>/dev/null) || into=HEAD
-    g merge-base --is-ancestor "$1" "$into"
+# Head commits of merged GitHub PRs, as "<branch> <sha>" lines. Empty when gh
+# is missing or the remote isn't on GitHub.
+pr_heads=$(command -v gh > /dev/null && cd "$main" &&
+    gh pr list --state merged --limit 1000 --json headRefName,headRefOid \
+        -q '.[] | "\(.headRefName) \(.headRefOid)"' 2>/dev/null || true)
+
+# Prints how a ref is merged: "git" when it is in the main worktree's HEAD or
+# origin's default branch, "pr" when its tip is part of a merged PR, or nothing.
+# Its own upstream doesn't count, because wtgc deletes that too. For a detached
+# worktree, $1 is its commit and $2 is empty.
+merged_by() {
+    local ref=$1 branch=$2 into name sha
+    for into in HEAD ${default:+"origin/$default"}; do
+        if g merge-base --is-ancestor "$ref" "$into" 2>/dev/null; then
+            echo git
+            return
+        fi
+    done
+    [[ -n "$branch" ]] || return 0
+    while read -r name sha; do
+        if [[ "$name" == "$branch" ]] && g merge-base --is-ancestor "$ref" "$sha" 2>/dev/null; then
+            echo pr
+            return
+        fi
+    done <<< "$pr_heads"
 }
 
-# Copy every file under $1/$3 to $2/$3, skipping excluded paths. A file that already exists with
-# different content is kept and the incoming copy lands beside it as
-# <name>.<branch>, so nothing from the worktree is lost.
+# Copy every file under $1/$3 to $2/$3, skipping excluded paths. A file that
+# already exists with different content is kept and the incoming copy lands
+# beside it as <name>.<suffix>, so nothing from the worktree is lost.
 rescue() {
     local src=$1 dest=$2 rel=$3 suffix=${4//\//-} file target ex
     [[ -e "$src/$rel" ]] || return 0
@@ -77,15 +101,36 @@ protected=$(g worktree list --porcelain | awk -v main="$main" -v here="$here" '
     /^branch /   { if (path == main || path == here) { sub(/^branch refs\/heads\//, ""); print } }
 ')
 
-selected=$(
+# One tab-separated line per candidate: label, ref, branch, path. A detached
+# worktree's ref is its commit. Empty fields hold "-", because read collapses
+# runs of tabs.
+candidates() {
     g for-each-ref --format='%(refname:short)%09%(worktreepath)' refs/heads |
-        awk -F '\t' -v protected="$protected" -v def="$default" '
-            BEGIN { n = split(protected, p, "\n"); for (i = 1; i <= n; i++) skip[p[i]] = 1; skip[def] = 1 }
-            !($1 in skip)
-        ' |
-        column -t -s $'\t' |
-        fzf --multi --height=40% --reverse --prompt="delete> " |
-        awk '{print $1}'
+        while IFS=$'\t' read -r branch path; do
+            [[ "$branch" == "$default" ]] && continue
+            grep -qxF -- "$branch" <<< "$protected" && continue
+            printf '%s\t%s\t%s\t%s\n' "$branch" "$branch" "$branch" "${path:--}"
+        done
+    g worktree list --porcelain | awk '
+        /^worktree / { path = substr($0, 10); head = "" }
+        /^HEAD /     { head = substr($0, 6) }
+        /^detached/  { print head "\t" path }
+    ' | while IFS=$'\t' read -r head path; do
+        [[ "$path" == "$main" || "$path" == "$here" ]] && continue
+        printf '(detached %s)\t%s\t-\t%s\n' "${head:0:7}" "$head" "$path"
+    done
+}
+
+selected=$(
+    candidates |
+        while IFS=$'\t' read -r label ref branch path; do
+            how=$(merged_by "$ref" "${branch#-}")
+            [[ -z "$how" ]] && $only_merged && continue
+            mark=${how:+✓ $how}
+            printf '%s\t%s\t%s\t%s\t%s\n' "$label" "${mark:--}" "$ref" "$branch" "$path"
+        done |
+        fzf --multi --height=40% --reverse --prompt="delete> " \
+            --delimiter='\t' --with-nth=1,2,5
 )
 
 if [[ -z "$selected" ]]; then
@@ -93,9 +138,9 @@ if [[ -z "$selected" ]]; then
 fi
 
 echo "To delete (worktree, local branch, origin branch):"
-while read -r branch; do
-    path=$(g for-each-ref --format='%(worktreepath)' "refs/heads/$branch")
-    echo "  $branch${path:+  ($path)}"
+while IFS=$'\t' read -r label _ _ _ path; do
+    path=${path#-}
+    echo "  $label${path:+  ($path)}"
 done <<< "$selected"
 if ((${#merges[@]})); then
     echo "Rescuing into $here: ${merges[*]}"
@@ -108,36 +153,38 @@ read -r -p "Proceed? [y/N] " answer < /dev/tty
 [[ "$answer" == [yY] ]] || exit 1
 
 worktree_flag=
-branch_flag=-d
 if $force; then
     worktree_flag=--force
-    branch_flag=-D
 fi
 
 status=0
-while read -r branch; do
-    path=$(g for-each-ref --format='%(worktreepath)' "refs/heads/$branch")
-
-    if ! $force && ! merged "$branch"; then
-        echo "skipped $branch: not fully merged (retry with -f)" >&2
+while IFS=$'\t' read -r label mark ref branch path; do
+    branch=${branch#-}
+    path=${path#-}
+    if ! $force && [[ "$mark" == - ]]; then
+        echo "skipped $label: not fully merged (retry with -f)" >&2
         status=1
         continue
     fi
 
     if [[ -n "$path" ]]; then
         for rel in ${merges[@]+"${merges[@]}"}; do
-            rescue "$path" "$here" "${rel%/}" "$branch"
+            rescue "$path" "$here" "$rel" "${branch:-${ref:0:7}}"
         done
     fi
 
     if [[ -n "$path" ]] && ! g worktree remove $worktree_flag "$path"; then
-        echo "skipped $branch: worktree not removed (retry with -f)" >&2
+        echo "skipped $label: worktree not removed (retry with -f)" >&2
         status=1
         continue
     fi
 
-    if ! g branch "$branch_flag" "$branch"; then
-        echo "skipped $branch: local branch not deleted (retry with -f)" >&2
+    [[ -n "$branch" ]] || continue
+
+    # The merge check above already ran. -d would apply git's own test, which
+    # refuses squash merges and branches merged only into origin's default.
+    if ! g branch -D "$branch"; then
+        echo "skipped $label: local branch not deleted (retry with -f)" >&2
         status=1
         continue
     fi

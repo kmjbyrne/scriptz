@@ -113,14 +113,17 @@ It needs `git` and `fzf` on your `PATH`.
 
 `wtgc`
 
-Fuzzy-select local branches and delete each one everywhere: its worktree on
-disk, the local branch, and the branch on `origin`. Press `Tab` to pick more
-than one. The script lists what it will delete and asks before it touches
-anything.
+Fuzzy-select local branches and detached worktrees, and delete each one
+everywhere: its worktree on disk, the local branch, and the branch on `origin`.
+Press `Tab` to pick more than one. The script lists what it will delete and asks
+before it touches anything.
 
 ```bash
 # Safe: skips dirty worktrees and unmerged branches
 wtgc
+
+# List only merged branches and worktrees
+wtgc --merged
 
 # Force past both
 wtgc -f
@@ -142,17 +145,23 @@ different content, yours stays and the rescued copy lands beside it as
 Prefix a path with `!` to leave it out of the rescue. The path can be a glob.
 Quote it, or your shell may treat `!` as history expansion.
 
-An unmerged branch is skipped before anything is touched, so its worktree stays
-put. "Merged" uses the same test as `git branch -d`: merged into the branch's
-upstream if it has one, else into the main worktree's `HEAD`. Squash-merged PRs
-count as unmerged, so delete those with `-f`.
+Each entry shows how it's merged. `✓ git` means its commits are in the main
+worktree's `HEAD` or `origin`'s default branch. `✓ pr` means GitHub reports a
+merged PR for it, which catches squash merges. A branch only counts as `✓ pr`
+when its tip is part of that PR, so commits added after the merge keep it
+unmerged. Being pushed to its own upstream doesn't count, because `wtgc` deletes
+that too. Without `gh`, only `✓ git` is checked.
+
+An unmerged entry is skipped before anything is touched, so its worktree stays
+put. Use `-f` to delete it anyway. Detached worktrees, such as ones left by
+background Claude jobs, are listed too.
 
 The list leaves out the main worktree's branch, the branch you are on, and the
 `origin` default branch. If a worktree or local branch can't be removed, that
 branch is skipped and nothing is pushed for it. The script exits non-zero if
 anything was skipped.
 
-It needs `git` and `fzf` on your `PATH`.
+It needs `git` and `fzf` on your `PATH`, plus `gh` for `✓ pr`.
 
 ## Bin
 
